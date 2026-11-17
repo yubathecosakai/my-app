@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>券売機用 クーポンQRコード</title>
+
+  <!-- 1. アクセス制限スクリプト -->
+  <script>
+    (function() {
+      var ua = navigator.userAgent;
+      var isLine = /Line/i.test(ua) || /LIFF/i.test(ua);
+      var isAndroidWebView = /; wv\)/i.test(ua) || (Array.isArray(ua.match(/Android/i)) && /Version\/[0-9.]+/i.test(ua));
+      var isIosWebView = /(iPhone|iPod|iPad).*AppleWebKit/i.test(ua) && (!/Safari/i.test(ua) || isLine);
+
+      if (!isLine && !isAndroidWebView && !isIosWebView) {
+        document.write(`
+          <div style="padding:40px 20px; text-align:center; font-family:sans-serif; color:#333;">
+            <h2 style="color:#d9534f; margin-bottom:10px;">アクセスエラー</h2>
+            <p>このページは「LINE公式アカウント」または「アプリ内」からのみアクセス可能です。</p>
+            <p style="font-size:12px; color:#888;">（ChromeやEdge等の標準ブラウザからは直接利用できません）</p>
+          </div>
+        `);
+        window.stop();
+      }
+    })();
+  </script>
+
+  <!-- 2. LIFF SDK ＆ QRコードライブラリ -->
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+      text-align: center;
+      background-color: #000000;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .card {
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      display: inline-block;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      max-width: 500px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #qrcode {
+      margin: 20px auto;
+      display: flex;
+      justify-content: center;
+      min-height: 220px; /* QR表示エリアの崩れ防止 */
+    }
+    .data-box {
+      background: #eee;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 13px;
+      word-break: break-all;
+      border-radius: 6px;
+      text-align: left;
+      border: 1px solid #ccc;
+    }
+    .highlight { color: #d9534f; font-weight: bold; }
+    .btn-use {
+      background-color: #06C755;
+      color: white;
+      font-size: 18px;
+      font-weight: bold;
+      padding: 14px 28px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 10px;
+    }
+    .used-msg { color: #d9534f; font-size: 16px; font-weight: bold; padding: 20px 0; }
+    .status-text { font-size: 12px; color: #666; margin-top: 10px; }
+
+   /* 券売機ガイド用スタイル */
+    .guide-text {
+      font-size: 15px;
+      font-weight: bold;
+      color: #333;
+      line-height: 1.5;
+      margin: 15px 0 10px 0;
+      background: #fff8e1; /* 薄い黄色枠で強調 */
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ffe082;
+    }
+    .guide-image-box {
+      margin: 10px 0;
+      text-align: center;
+    }
+    .guide-img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>毎月送信！限定クーポン</h2>
+
+  <!-- ① クーポン使用前（ボタン）画面 ※最初から非表示にする -->
+  <div id="beforeUse"style="display: none;">
+    <p>「クーポンを使用する」を押すと、券売機で使えるQRコードが10分間表示されます。<br><small>※一度使用すると再表示できません。</small></p>
+    <button class="btn-use" onclick="useCoupon()">クーポンを使用する</button>
+  </div>
+
+<!-- ② クーポン使用後（QR表示）画面 -->
+  <div id="afterUse" style="display: none;">
+    <!-- 1. QRコード表示エリア -->
+    <div id="qrcode"></div>
+
+    <!-- 2. 案内テキスト -->
+    <p class="guide-text">
+      券売機画面の<strong>【クーポンQRコード読み取り】</strong>を押して下部リーダーにかざして下さい
+    </p>
+
+    <!-- 3. 券売機操作ガイド画像 -->
+    <div class="guide-image-box">
+      <img src="https://yu-bath.com/cms/wp-content/uploads/2026/08/70c3144fa4d56e2c0c6862b2fc982540-2.png" alt="券売機操作手順" class="guide-img">
+    </div>
+
+    <!-- 4. 自動更新状態（テキストボックスは削除済） -->
+    <p class="status-text" id="lastUpdated">自動更新準備中...</p>
+  </div>
+
+<!-- ③ 使用済み画面 -->
+  <div id="alreadyUsed" style="display: none;">
+    <p style="color: #d9534f; font-weight: bold; font-size: 16px; padding: 20px 0;">このクーポンは今月すでに使用済みです</p>
+  </div>
+
+<!-- 自作確認ダイアログ（初期状態は非表示） -->
+  <div id="confirmModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;">
+    <div style="background: white; padding: 20px; border-radius: 12px; max-width: 300px; width: 80%; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+      <h3 style="margin-top: 0; font-size: 18px; color: #333;">クーポンの確認</h3>
+      <p style="font-size: 14px; color: #666; margin: 15px 0;">本当にクーポンを使用しますか？<br><small style="color: #d9534f;">（10分間のタイマーが開始します）</small></p>
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button onclick="closeModal()" style="flex: 1; padding: 10px; border: 1px solid #ccc; background: #f5f5f5; border-radius: 6px; font-weight: bold; cursor: pointer;">キャンセル</button>
+        <button onclick="executeUseCoupon()" style="flex: 1; padding: 10px; border: none; background: #06C755; color: white; border-radius: 6px; font-weight: bold; cursor: pointer;">使用する</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ★ LINE Developersで取得した「LIFF ID」を設定（必要に応じて書き換えてください）
+  const MY_LIFF_ID = "2011066663-iag5xGj8";
+
+  const COMPANY_CODE = "34300000000000010";
+  const STORE_CODE   = "000003";
+  const PAGE_NO      = "004";
+
+// 画面ロード完了時の処理
+  window.addEventListener("DOMContentLoaded", function() {
+    var ua = navigator.userAgent;
+    // LINEアプリ（またはLIFF）からのアクセスか判定
+    var isLineApp = /Line/i.test(ua) || /LIFF/i.test(ua);
+
+    // ★ LINEアプリかつLIFF IDが設定されている場合のみLIFF（LINEログイン・友だちチェック）を実行
+    if (isLineApp && window.liff && MY_LIFF_ID !== "YOUR_LIFF_ID") {
+      liff.init({ liffId: MY_LIFF_ID }).then(() => {
+        if (!liff.isLoggedIn()) {
+          liff.login();
+        } else {
+          // LINEユーザーは友だち状態チェックへ
+          checkFriendship();
+        }
+      }).catch((err) => {
+        console.error("LIFF Error:", err);
+        checkCouponStatus();
+      });
+    } else {
+      // ★ 自社アプリ（WebView）や通常アクセスの場合は、LINEログインを行わずにそのままクーポン画面を表示
+      checkCouponStatus();
+    }
+  });
+
+  // ★ 友だち登録チェック処理（LINEユーザー用）
+  function checkFriendship() {
+    liff.getFriendship().then(data => {
+      if (data.friendFlag) {
+        checkCouponStatus();
+      } else {
+        showAddFriendScreen();
+      }
+    }).catch(err => {
+      console.error("Friendship Check Error:", err);
+      checkCouponStatus();
+    });
+  }
+
+  // ★ 友だち未登録時の遮断画面表示（LINEユーザー用）
+  function showAddFriendScreen() {
+    const beforeUse = document.getElementById("beforeUse");
+    const afterUse = document.getElementById("afterUse");
+    const alreadyUsed = document.getElementById("alreadyUsed");
+
+    if (beforeUse) beforeUse.style.display = "none";
+    if (afterUse) afterUse.style.display = "none";
+    if (alreadyUsed) alreadyUsed.style.display = "none";
+
+    const card = document.querySelector(".card");
+    if (card) {
+      card.innerHTML = `
+        <div style="padding: 10px 0;">
+          <h3 style="color:#d9534f; margin-bottom:12px;">友だち限定クーポンです</h3>
+          <p style="font-size:14px; color:#555; line-height:1.6; margin-bottom:20px;">
+            このクーポンを利用するには、公式LINEアカウントの「友だち追加」が必要です。
+          </p>
+          <a href="https://line.me/R/ti/p/@yubath_eco" 
+             style="display:block; background-color:#06C755; color:white; font-weight:bold; padding:14px; border-radius:8px; text-decoration:none; font-size:16px;">
+            友だち追加して利用する
+          </a>
+        </div>
+      `;
+    }
+  }
+
+  // 現在の「年月（YYYYMM）」を取得する関数（例：2026年8月なら "202608"）
+  function getCurrentYearMonth() {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm   = String(now.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}${mm}`;
+  }
+
+// クーポンの使用状態チェック
+  function checkCouponStatus() {
+    const currentKey = "yubath_coupon_used_" + getCurrentYearMonth();
+
+    // 古いデータのお掃除
+    for (let i = 0; i < localStorage.length; i++) {
+      let key = localStorage.key(i);
+      if (key && key.startsWith("yubath_coupon_used_") && key !== currentKey) {
+        localStorage.removeItem(key);
+      }
+    }
+
+    const isUsed = localStorage.getItem(currentKey);
+
+    // 要素をすべて隠した状態から、判定結果に応じて必要なものだけを表示する
+    const beforeEl = document.getElementById("beforeUse");
+    const afterEl = document.getElementById("afterUse");
+    const alreadyEl = document.getElementById("alreadyUsed");
+
+    if (beforeEl) beforeEl.style.display = "none";
+    if (afterEl) afterEl.style.display = "none";
+    if (alreadyEl) alreadyEl.style.display = "none";
+
+    if (isUsed === "true") {
+      // すでに使用済みの場合は、即座に使用済み画面を表示
+      if (alreadyEl) alreadyEl.style.display = "block";
+    } else {
+      // 未使用の場合のみ、ボタンを表示する
+      if (beforeEl) beforeEl.style.display = "block";
+    }
+  }
+
+// 「クーポンを使用する」ボタンを押した時（ダイアログを開く）
+  function useCoupon() {
+    document.getElementById("confirmModal").style.display = "flex";
+  }
+
+  // キャンセルを押した時（ダイアログを閉じる）
+  function closeModal() {
+    document.getElementById("confirmModal").style.display = "none";
+  }
+
+  // 「使用する」を決定した時の実行処理
+  function executeUseCoupon() {
+    closeModal();
+    const currentKey = "yubath_coupon_used_" + getCurrentYearMonth();
+    localStorage.setItem(currentKey, "true");
+
+    document.getElementById("beforeUse").style.display = "none";
+    if (document.getElementById("alreadyUsed")) document.getElementById("alreadyUsed").style.display = "none";
+    document.getElementById("afterUse").style.display = "block";
+
+    generateQRCode();
+    setInterval(generateQRCode, 60000);
+  }
+  function formatDate(date) {
+    const yyyy = date.getFullYear();
+    const mm   = String(date.getMonth() + 1).padStart(2, '0');
+    const dd   = String(date.getDate()).padStart(2, '0');
+    const hh   = String(date.getHours()).padStart(2, '0');
+    const mi   = String(date.getMinutes()).padStart(2, '0');
+    return `${yyyy}${mm}${dd}${hh}${mi}`;
+  }
+
+  // SHA-1計算関数
+  async function calculateSHA1(text) {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+      const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch(e) {
+      console.error("Crypto API Failed, using fallback:", e);
+      // 万が一標準APIが動かない環境用のダミー（※動作確認・エラー停止防止）
+      return "00000000000000000000000000000075dde5";
+    }
+  }
+
+  async function generateQRCode() {
+    try {
+      const now = new Date();
+      const end = new Date(now.getTime() + 10 * 60 * 1000);
+
+      const startTimeStr = formatDate(now);
+      const endTimeStr   = formatDate(end);
+      const baseText     = `"${COMPANY_CODE}","${STORE_CODE}","${startTimeStr}","${endTimeStr}","${PAGE_NO}",`;
+
+      const fullSha1Hash = await calculateSHA1(baseText);
+      const hashVal      = fullSha1Hash.slice(-6);
+      const finalQrData  = `${baseText}${hashVal}`;
+
+      //document.getElementById("qrTextDisplay").innerHTML = `${baseText}<span class="highlight">${hashVal}</span>`;
+
+      const qrContainer = document.getElementById("qrcode");
+      qrContainer.innerHTML = "";
+
+      new QRCode(qrContainer, {
+        text: finalQrData,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      const timeStr = now.toTimeString().split(' ')[0];
+      document.getElementById("lastUpdated").innerText = `自動更新中（最終更新: ${timeStr}）`;
+    } catch(err) {
+      console.error("QR Generation Error:", err);
+      document.getElementById("qrTextDisplay").innerText = "エラー: QRコードの生成に失敗しました。";
+    }
+  }
+</script>
+
+</body>
+</html>
