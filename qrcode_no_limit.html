@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>券売機用 クーポンQRコード</title>
+
+  <!-- 1. アクセス制限スクリプト -->
+  <script>
+    (function() {
+      var ua = navigator.userAgent;
+      var isLine = /Line/i.test(ua) || /LIFF/i.test(ua);
+      var isAndroidWebView = /; wv\)/i.test(ua) || (Array.isArray(ua.match(/Android/i)) && /Version\/[0-9.]+/i.test(ua));
+      var isIosWebView = /(iPhone|iPod|iPad).*AppleWebKit/i.test(ua) && (!/Safari/i.test(ua) || isLine);
+
+      if (!isLine && !isAndroidWebView && !isIosWebView) {
+        document.write(`
+          <div style="padding:40px 20px; text-align:center; font-family:sans-serif; color:#333;">
+            <h2 style="color:#d9534f; margin-bottom:10px;">アクセスエラー</h2>
+            <p>このページは「LINE公式アカウント」または「アプリ内」からのみアクセス可能です。</p>
+            <p style="font-size:12px; color:#888;">（ChromeやEdge等の標準ブラウザからは直接利用できません）</p>
+          </div>
+        `);
+        window.stop();
+      }
+    })();
+  </script>
+
+  <!-- 2. LIFF SDK ＆ QRコードライブラリ -->
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+      text-align: center;
+      background-color: #f4f6f8;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .card {
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      display: inline-block;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      max-width: 500px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #qrcode {
+      margin: 10px auto 20px;
+      display: flex;
+      justify-content: center;
+      min-height: 220px;
+    }
+    .guide-text {
+      font-size: 15px;
+      font-weight: bold;
+      color: #333;
+      line-height: 1.5;
+      margin: 15px 0 10px 0;
+      background: #fff8e1;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ffe082;
+    }
+    .guide-image-box {
+      margin: 10px 0;
+      text-align: center;
+    }
+    .guide-img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+    .status-text {
+      font-size: 12px;
+      color: #666;
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card" id="mainCard">
+  <h2>朝昼割引/会員割引</h2>
+
+  <!-- 開くと即表示されるエリア -->
+  <div id="qrArea">
+    <!-- 1. QRコード表示エリア -->
+    <div id="qrcode"></div>
+
+    <!-- 2. 案内テキスト -->
+    <p class="guide-text">
+      券売機画面の<strong>【クーポンQRコード読み取り】</strong>を押して下部リーダーにかざして下さい
+    </p>
+
+    <!-- 3. 券売機操作ガイド画像 -->
+    <div class="guide-image-box">
+      <img src="https://yu-bath.com/cms/wp-content/uploads/2026/08/70c3144fa4d56e2c0c6862b2fc982540-2.png" alt="券売機操作手順" class="guide-img">
+    </div>
+
+    <!-- 4. 自動更新状態 -->
+    <p class="status-text" id="lastUpdated">自動更新準備中...</p>
+  </div>
+</div>
+
+<script>
+  // ★ LIFF ID（必要に応じて変更してください）
+  const MY_LIFF_ID = "2011066663-srqIJurL";
+
+  const COMPANY_CODE = "34300000000000010";
+  const STORE_CODE   = "000003";
+  const PAGE_NO      = "002";
+
+  // 画面ロード完了時の処理
+  window.addEventListener("DOMContentLoaded", function() {
+    var ua = navigator.userAgent;
+    var isLineApp = /Line/i.test(ua) || /LIFF/i.test(ua);
+
+    if (isLineApp && window.liff && MY_LIFF_ID !== "YOUR_LIFF_ID") {
+      liff.init({ liffId: MY_LIFF_ID }).then(() => {
+        if (!liff.isLoggedIn()) {
+          liff.login();
+        } else {
+          checkFriendship();
+        }
+      }).catch((err) => {
+        console.error("LIFF Error:", err);
+        startQRCodeTimer();
+      });
+    } else {
+      // 自社アプリ（WebView）などの場合は直接QRタイマーを開始
+      startQRCodeTimer();
+    }
+  });
+
+  // 友だち登録チェック処理（LINE用）
+  function checkFriendship() {
+    liff.getFriendship().then(data => {
+      if (data.friendFlag) {
+        startQRCodeTimer();
+      } else {
+        showAddFriendScreen();
+      }
+    }).catch(err => {
+      console.error("Friendship Check Error:", err);
+      startQRCodeTimer();
+    });
+  }
+
+  // 友だち未登録時の遮断表示
+  function showAddFriendScreen() {
+    const qrArea = document.getElementById("qrArea");
+    if (qrArea) qrArea.style.display = "none";
+
+    const card = document.getElementById("mainCard");
+    if (card) {
+      card.innerHTML = `
+        <div style="padding: 10px 0;">
+          <h3 style="color:#d9534f; margin-bottom:12px;">友だち限定クーポンです</h3>
+          <p style="font-size:14px; color:#555; line-height:1.6; margin-bottom:20px;">
+            このクーポンを利用するには、公式LINEアカウントの「友だち追加」が必要です。
+          </p>
+          <a href="https://line.me/R/ti/p/@あなたのLINE公式ID" 
+             style="display:block; background-color:#06C755; color:white; font-weight:bold; padding:14px; border-radius:8px; text-decoration:none; font-size:16px;">
+            友だち追加して利用する
+          </a>
+        </div>
+      `;
+    }
+  }
+
+  // QRコードの生成＆1分ごとの自動更新タイマー開始
+  function startQRCodeTimer() {
+    generateQRCode();
+    setInterval(generateQRCode, 60000); // 60秒（1分）ごとに再生成
+  }
+
+  function formatDate(date) {
+    const yyyy = date.getFullYear();
+    const mm   = String(date.getMonth() + 1).padStart(2, '0');
+    const dd   = String(date.getDate()).padStart(2, '0');
+    const hh   = String(date.getHours()).padStart(2, '0');
+    const mi   = String(date.getMinutes()).padStart(2, '0');
+    return `${yyyy}${mm}${dd}${hh}${mi}`;
+  }
+
+  // SHA-1計算関数
+  async function calculateSHA1(text) {
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(text);
+      const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch(e) {
+      return "00000000000000000000000000000075dde5";
+    }
+  }
+
+  async function generateQRCode() {
+    try {
+      const now = new Date();
+      // 有効期限を「現在時刻から10分後」として動的生成
+      const end = new Date(now.getTime() + 10 * 60 * 1000);
+
+      const startTimeStr = formatDate(now);
+      const endTimeStr   = formatDate(end);
+      const baseText     = `"${COMPANY_CODE}","${STORE_CODE}","${startTimeStr}","${endTimeStr}","${PAGE_NO}",`;
+
+      const fullSha1Hash = await calculateSHA1(baseText);
+      const hashVal      = fullSha1Hash.slice(-6);
+      const finalQrData  = `${baseText}${hashVal}`;
+
+      const qrContainer = document.getElementById("qrcode");
+      qrContainer.innerHTML = "";
+
+      new QRCode(qrContainer, {
+        text: finalQrData,
+        width: 220,
+        height: 220,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      const timeStr = now.toTimeString().split(' ')[0];
+      document.getElementById("lastUpdated").innerText = `自動更新中（最終更新: ${timeStr}）`;
+    } catch(err) {
+      console.error("QR Generation Error:", err);
+    }
+  }
+</script>
+
+</body>
+</html>
